@@ -33,19 +33,19 @@ class NabiApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => MaterialApp(
-        title: 'Nabi',
-        debugShowCheckedModeBanner: false,
-        theme: ThemeData(
-          brightness: Brightness.dark,
-          colorScheme: ColorScheme.fromSeed(
-            seedColor: const Color(0xFF8B7CFF),
-            brightness: Brightness.dark,
-          ),
-          scaffoldBackgroundColor: const Color(0xFF101018),
-          useMaterial3: true,
-        ),
-        home: const NabiHomePage(),
-      );
+    title: 'Nabi',
+    debugShowCheckedModeBanner: false,
+    theme: ThemeData(
+      brightness: Brightness.dark,
+      colorScheme: ColorScheme.fromSeed(
+        seedColor: const Color(0xFF8B7CFF),
+        brightness: Brightness.dark,
+      ),
+      scaffoldBackgroundColor: const Color(0xFF101018),
+      useMaterial3: true,
+    ),
+    home: const NabiHomePage(),
+  );
 }
 
 class NabiHomePage extends StatefulWidget {
@@ -73,10 +73,10 @@ class _NabiHomePageState extends State<NabiHomePage> {
       if (mounted) {
         setState(() {
           _memoryError = null;
-          _activeCalls = counts['call_assistant_logs'];
+          _activeCalls = counts['call_assistant_logs'] ?? 0;
           _activeRecords = counts.values.fold<int>(
             0,
-            (sum, count) => sum + count,
+            (sum, count) => sum + (count ?? 0),
           );
         });
       }
@@ -133,8 +133,8 @@ class _NabiHomePageState extends State<NabiHomePage> {
       }
 
       final contents = await file.readAsString();
-      final prettyJson =
-          const JsonEncoder.withIndent('  ').convert(jsonDecode(contents));
+      final prettyJson = const JsonEncoder.withIndent('  ')
+          .convert(jsonDecode(contents));
       await showDialog<void>(
         context: context,
         builder: (context) => AlertDialog(
@@ -393,7 +393,7 @@ class _NabiHomePageState extends State<NabiHomePage> {
                     (_activeRecords == null
                         ? 'Loading local record count…'
                         : '$_activeRecords active records stored on this device'
-                            '${_activeCalls == null ? '' : ' ($_activeCalls call logs)'}'),
+                              '${_activeCalls == null ? '' : ' ($_activeCalls call logs)'}'),
               ),
             ),
           ),
