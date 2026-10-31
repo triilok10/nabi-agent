@@ -49,22 +49,54 @@ class NabiModelStatusCard extends StatelessWidget {
   const NabiModelStatusCard({
     required this.isReady,
     required this.status,
+    required this.isImporting,
+    required this.canImport,
+    required this.onImportModel,
     super.key,
   });
 
   final bool isReady;
   final String status;
+  final bool isImporting;
+  final bool canImport;
+  final Future<void> Function() onImportModel;
 
   @override
   Widget build(BuildContext context) => Card(
-    child: ListTile(
-      leading: Icon(
-        isReady ? Icons.memory_outlined : Icons.warning_amber_outlined,
-        color: isReady ? Colors.greenAccent : Colors.orangeAccent,
-      ),
-      title: const Text('Local language model'),
-      subtitle: Text(status),
-      trailing: Text(isReady ? 'Ready' : 'Not ready'),
+    child: Column(
+      children: [
+        ListTile(
+          leading: Icon(
+            isReady ? Icons.memory_outlined : Icons.warning_amber_outlined,
+            color: isReady ? Colors.greenAccent : Colors.orangeAccent,
+          ),
+          title: const Text('Local language model'),
+          subtitle: Text(status),
+          trailing: Text(isReady ? 'Ready' : 'Not ready'),
+        ),
+        Align(
+          alignment: AlignmentDirectional.centerEnd,
+          child: Padding(
+            padding: const EdgeInsets.only(right: 12, bottom: 8),
+            child: OutlinedButton.icon(
+              onPressed: canImport && !isImporting ? onImportModel : null,
+              icon: isImporting
+                  ? const SizedBox.square(
+                      dimension: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.folder_open_outlined),
+              label: Text(
+                isImporting
+                    ? 'Importing model…'
+                    : isReady
+                    ? 'Replace model'
+                    : 'Import model',
+              ),
+            ),
+          ),
+        ),
+      ],
     ),
   );
 }

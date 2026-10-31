@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:path/path.dart' as path;
 import 'package:path_provider/path_provider.dart';
@@ -98,6 +99,7 @@ class _NabiHomePageState extends State<NabiHomePage>
   bool _isRecording = false;
   bool _isTranscribing = false;
   bool _modelLoading = true;
+  bool _importingModel = false;
   String? _memoryError;
   String? _modelError;
   LocalModelIntegrationBridge? _localModel;
@@ -321,6 +323,97 @@ class _NabiHomePageState extends State<NabiHomePage>
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('Could not check storage access: $error')),
         );
+      }
+    }
+  }
+
+  Future<void> _importModel() async {
+    if (_importingModel || _modelLoading || _processingCommand) return;
+    try {
+      final selectedFile = await FilePicker.pickFile(
+        type: FileType.custom,
+        allowedExtensions: const ['gguf'],
+      );
+      if (selectedFile == null || !mounted) return;
+      if (!selectedFile.name.toLowerCase().endsWith('.gguf')) {
+        throw const FormatException('Choose a GGUF model file.');
+      }
+      final selectedFileLength = await selectedFile.length();
+      if (selectedFileLength == null || selectedFileLength <= 0) {
+        throw const FormatException('The selected model file is empty.');
+      }
+
+      setState(() => _importingModel = true);
+      await _installModelFile(selectedFile);
+      await _loadModel();
+      if (!mounted) return;
+      final modelReady = _localModel != null;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            modelReady
+                ? 'Local model imported and ready.'
+                : 'Model copied, but it could not be loaded: $_modelError',
+          ),
+        ),
+      );
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Could not import local model: $error')),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _importingModel = false);
+    }
+  }
+
+  Future<void> _installModelFile(PlatformFile selectedFile) async {
+    final modelFile = File(widget.modelPath);
+    await modelFile.parent.create(recursive: true);
+
+    final suffix = DateTime.now().microsecondsSinceEpoch.toString();
+    final temporaryFile = File('${widget.modelPath}.$suffix.tmp');
+    final backupFile = File('${widget.modelPath}.$suffix.backup');
+    final input = selectedFile.readAsByteStream().cast<List<int>>();
+    var destinationBackedUp = false;
+    var previousModelDisposed = false;
+
+    try {
+      await input.pipe(temporaryFile.openWrite());
+      if (await temporaryFile.length() == 0) {
+        throw const FormatException('The selected model file is empty.');
+      }
+
+      final previousModel = _localModel;
+      if (previousModel != null) {
+        await previousModel.dispose();
+        previousModelDisposed = true;
+      }
+      if (mounted) {
+        setState(() {
+          _localModel = null;
+          _modelError = null;
+          _modelLoading = true;
+        });
+      }
+
+      if (await modelFile.exists()) {
+        await modelFile.rename(backupFile.path);
+        destinationBackedUp = true;
+      }
+      await temporaryFile.rename(modelFile.path);
+      if (destinationBackedUp) await backupFile.delete();
+    } catch (_) {
+      if (destinationBackedUp && !await modelFile.exists()) {
+        await backupFile.rename(modelFile.path);
+      }
+      if (previousModelDisposed && mounted) await _loadModel();
+      rethrow;
+    } finally {
+      if (await temporaryFile.exists()) await temporaryFile.delete();
+      if (await backupFile.exists() && await modelFile.exists()) {
+        await backupFile.delete();
       }
     }
   }
@@ -682,6 +775,13 @@ class _NabiHomePageState extends State<NabiHomePage>
                 ? 'Loading the on-device GGUF model…'
                 : (_modelError ??
                       'GGUF model loaded for private on-device inference.'),
+            isImporting: _importingModel,
+            canImport:
+                !_modelLoading &&
+                !_processingCommand &&
+                !_isRecording &&
+                !_isTranscribing,
+            onImportModel: _importModel,
           ),
           NabiCommandPanel(
             controller: _commandController,

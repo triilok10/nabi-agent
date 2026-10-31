@@ -24,6 +24,7 @@ dependencies:
   llamadart: 0.17.0
   whisper_ggml: 2.8.1
   record: 7.1.2
+  file_picker: ^13.3.0
 
 dev_dependencies:
   flutter_test:

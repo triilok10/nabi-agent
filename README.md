@@ -38,9 +38,11 @@ container, and local SMTP/Ollama test services.
 
 ## Local model files
 
-The app never downloads model files automatically. Copy a compatible GGUF chat
-model to the app's private application-support directory as
-`models/nabi-model.gguf`. Copy the multilingual Whisper `base` model to
+The app never downloads model files automatically. Use **Import model** on
+the dashboard to choose a `.gguf` file; Nabi copies it to the app's private
+application-support directory as `models/nabi-model.gguf` and loads it locally.
+Alternatively, copy a compatible GGUF chat model there manually. Copy the
+multilingual Whisper `base` model to
 `ggml-base.bin` in the support directory reported by
 `WhisperController.getPath(WhisperModel.base)`. The UI shows the GGUF load
 status; voice transcription reports a missing Whisper file when the user stops
