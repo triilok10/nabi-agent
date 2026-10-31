@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:path/path.dart' as path;
 import 'package:sqflite/sqflite.dart';
 
@@ -16,7 +18,7 @@ class DBHelper {
     final dbPath = path.join(await getDatabasesPath(), _databaseName);
     final opened = await openDatabase(
       dbPath,
-      version: 2,
+      version: 3,
       onCreate: (db, version) async {
         await db.execute('''
           CREATE TABLE call_assistant_logs (
@@ -53,6 +55,7 @@ class DBHelper {
           )
         ''');
         await _createMemoryLogsTable(db);
+        await _createUserPreferencesTable(db);
         await db.execute(
           'CREATE INDEX call_logs_timestamp_idx ON call_assistant_logs(call_timestamp)',
         );
@@ -65,6 +68,7 @@ class DBHelper {
       },
       onUpgrade: (db, oldVersion, newVersion) async {
         if (oldVersion < 2) await _createMemoryLogsTable(db);
+        if (oldVersion < 3) await _createUserPreferencesTable(db);
       },
     );
     _database = opened;
@@ -90,9 +94,34 @@ class DBHelper {
       'system_response': systemResponse,
       'executed_action': executedAction,
       'execution_status': executionStatus,
-      'timestamp':
-          (timestamp ?? DateTime.now().toUtc()).toUtc().toIso8601String(),
+      'timestamp': (timestamp ?? DateTime.now().toUtc())
+          .toUtc()
+          .toIso8601String(),
     });
+  }
+
+  Future<void> saveUserPreference(String key, Object? value) async {
+    final normalizedKey = key.trim();
+    if (normalizedKey.isEmpty) {
+      throw ArgumentError.value(key, 'key', 'Preference key cannot be empty');
+    }
+    await (await database).insert('user_preferences', {
+      'key': normalizedKey,
+      'value': jsonEncode(value),
+      'updated_at': DateTime.now().toUtc().toIso8601String(),
+    }, conflictAlgorithm: ConflictAlgorithm.replace);
+  }
+
+  Future<Object?> readUserPreference(String key) async {
+    final rows = await (await database).query(
+      'user_preferences',
+      columns: ['value'],
+      where: 'key = ?',
+      whereArgs: [key],
+      limit: 1,
+    );
+    if (rows.isEmpty) return null;
+    return jsonDecode(rows.single['value']! as String) as Object?;
   }
 
   Future<List<Map<String, Object?>>> fetchMemoryLogs({int limit = 100}) async {
@@ -104,6 +133,36 @@ class DBHelper {
       orderBy: 'julianday(timestamp) DESC',
       limit: limit,
     );
+  }
+
+  Future<List<Map<String, Object?>>> fetchRelevantMemory(
+    String query, {
+    int limit = 6,
+  }) async {
+    if (limit < 1)
+      throw ArgumentError.value(limit, 'limit', 'Must be positive');
+    final terms = _memoryTerms(query);
+    if (terms.isEmpty) return const [];
+
+    final recent = await fetchMemoryLogs(limit: 100);
+    final scored = <({int score, Map<String, Object?> row})>[];
+    for (final row in recent) {
+      final text = [
+        row['user_input'],
+        row['system_response'],
+        row['executed_action'],
+      ].whereType<String>().join(' ').toLowerCase();
+      final score = terms.where(text.contains).length;
+      if (score > 0) scored.add((score: score, row: row));
+    }
+    scored.sort((a, b) {
+      final byScore = b.score.compareTo(a.score);
+      if (byScore != 0) return byScore;
+      return (b.row['timestamp'] as String).compareTo(
+        a.row['timestamp'] as String,
+      );
+    });
+    return scored.take(limit).map((entry) => entry.row).toList();
   }
 
   Future<List<Map<String, Object?>>> fetchActiveRecords(String table) async {
@@ -249,4 +308,20 @@ class DBHelper {
       'CREATE INDEX memory_logs_timestamp_idx ON memory_logs(timestamp)',
     );
   }
+
+  static Future<void> _createUserPreferencesTable(DatabaseExecutor db) async {
+    await db.execute('''
+      CREATE TABLE user_preferences (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      )
+    ''');
+  }
+
+  static Set<String> _memoryTerms(String text) => text
+      .toLowerCase()
+      .split(RegExp(r'[^\p{L}\p{N}]+', unicode: true))
+      .where((term) => term.length > 1)
+      .toSet();
 }

@@ -12,18 +12,21 @@ enum DevicePermissionResult {
 }
 
 class DevicePermissionService {
-  DevicePermissionService({
-    MethodChannel? channel,
-    bool? isAndroid,
-  })  : _channel =
-            channel ?? const MethodChannel('com.trilok.nabi/app_intents'),
-        _isAndroid = isAndroid ?? Platform.isAndroid;
+  DevicePermissionService({MethodChannel? channel, bool? isAndroid})
+    : _channel =
+          channel ?? const MethodChannel('com.nabi.agent/system_actions'),
+      _isAndroid = isAndroid ?? Platform.isAndroid;
 
   final MethodChannel _channel;
   final bool _isAndroid;
 
   Future<DevicePermissionResult> requestMicrophonePermission() async {
+    if (!_isAndroid) return DevicePermissionResult.notRequired;
     return _request(Permission.microphone);
+  }
+
+  Future<DevicePermissionResult> requestCameraPermission() async {
+    return _request(Permission.camera);
   }
 
   Future<DevicePermissionResult> requestStoragePermission() async {

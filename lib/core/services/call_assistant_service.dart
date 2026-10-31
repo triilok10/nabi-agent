@@ -6,7 +6,9 @@ import 'package:flutter/foundation.dart';
 /// invoke an Android call/accessibility service. Consent by the app owner alone
 /// cannot establish consent from the other call participant.
 class CallAssistantService extends ChangeNotifier {
-  bool _isEnabled = false;
+  CallAssistantService({bool initialValue = false}) : _isEnabled = initialValue;
+
+  bool _isEnabled;
 
   bool get isEnabled => _isEnabled;
 

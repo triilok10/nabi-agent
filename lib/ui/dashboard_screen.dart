@@ -14,47 +14,66 @@ class NabiDashboardMetric extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Card(
-        child: ListTile(
-          leading: Icon(icon),
-          title: Text(label),
-          trailing: Text(
-            value,
-            style: Theme.of(context).textTheme.titleLarge,
-          ),
-        ),
-      );
+    child: ListTile(
+      leading: Icon(icon),
+      title: Text(label),
+      trailing: Text(value, style: Theme.of(context).textTheme.titleLarge),
+    ),
+  );
 }
 
 class NabiAutomationStatusCard extends StatelessWidget {
-  const NabiAutomationStatusCard({
-    required this.isScheduled,
-    super.key,
-  });
+  const NabiAutomationStatusCard({required this.isScheduled, super.key});
 
   final bool isScheduled;
 
   @override
   Widget build(BuildContext context) => Card(
-        child: ListTile(
-          leading: Icon(
-            isScheduled ? Icons.schedule_outlined : Icons.pause_circle_outline,
-            color: isScheduled ? Colors.greenAccent : null,
-          ),
-          title: const Text('System automation'),
-          subtitle: Text(
-            isScheduled
-                ? 'Daily background archive preparation is scheduled with WorkManager.'
-                : 'Background archive scheduling is unavailable.',
-          ),
-          trailing: Text(isScheduled ? 'Scheduled' : 'Unavailable'),
-        ),
-      );
+    child: ListTile(
+      leading: Icon(
+        isScheduled ? Icons.schedule_outlined : Icons.pause_circle_outline,
+        color: isScheduled ? Colors.greenAccent : null,
+      ),
+      title: const Text('System automation'),
+      subtitle: Text(
+        isScheduled
+            ? 'Daily background archive preparation is scheduled with WorkManager.'
+            : 'Background archive scheduling is unavailable.',
+      ),
+      trailing: Text(isScheduled ? 'Scheduled' : 'Unavailable'),
+    ),
+  );
+}
+
+class NabiModelStatusCard extends StatelessWidget {
+  const NabiModelStatusCard({
+    required this.isReady,
+    required this.status,
+    super.key,
+  });
+
+  final bool isReady;
+  final String status;
+
+  @override
+  Widget build(BuildContext context) => Card(
+    child: ListTile(
+      leading: Icon(
+        isReady ? Icons.memory_outlined : Icons.warning_amber_outlined,
+        color: isReady ? Colors.greenAccent : Colors.orangeAccent,
+      ),
+      title: const Text('Local language model'),
+      subtitle: Text(status),
+      trailing: Text(isReady ? 'Ready' : 'Not ready'),
+    ),
+  );
 }
 
 class NabiCommandPanel extends StatelessWidget {
   const NabiCommandPanel({
     required this.controller,
     required this.isProcessing,
+    required this.isRecording,
     required this.onSubmit,
     required this.onMicrophone,
     required this.onStorage,
@@ -63,63 +82,63 @@ class NabiCommandPanel extends StatelessWidget {
 
   final TextEditingController controller;
   final bool isProcessing;
+  final bool isRecording;
   final VoidCallback onSubmit;
   final VoidCallback onMicrophone;
   final VoidCallback onStorage;
 
   @override
   Widget build(BuildContext context) => Card(
-        child: Padding(
-          padding: const EdgeInsets.all(16),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
+    child: Padding(
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text('Local command', style: Theme.of(context).textTheme.titleMedium),
+          const SizedBox(height: 8),
+          TextField(
+            controller: controller,
+            textInputAction: TextInputAction.send,
+            onSubmitted: (_) => onSubmit(),
+            decoration: InputDecoration(
+              hintText: 'Ask Nabi to do something…',
+              border: const OutlineInputBorder(),
+              prefixIcon: const Icon(Icons.chat_bubble_outline),
+              suffixIcon: IconButton(
+                tooltip: 'Run command',
+                onPressed: isProcessing ? null : onSubmit,
+                icon: isProcessing
+                    ? const SizedBox.square(
+                        dimension: 20,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.send),
+              ),
+            ),
+          ),
+          const SizedBox(height: 4),
+          const Text(
+            'Commands, audio capture, speech recognition, and memory stay '
+            'on this device. Voice only records while you hold an active session.',
+          ),
+          const SizedBox(height: 8),
+          Wrap(
+            spacing: 8,
             children: [
-              Text('Local command',
-                  style: Theme.of(context).textTheme.titleMedium),
-              const SizedBox(height: 8),
-              TextField(
-                controller: controller,
-                textInputAction: TextInputAction.send,
-                onSubmitted: (_) => onSubmit(),
-                decoration: InputDecoration(
-                  hintText: 'Try “Instagram open karo”',
-                  border: const OutlineInputBorder(),
-                  prefixIcon: const Icon(Icons.chat_bubble_outline),
-                  suffixIcon: IconButton(
-                    tooltip: 'Run command',
-                    onPressed: isProcessing ? null : onSubmit,
-                    icon: isProcessing
-                        ? const SizedBox.square(
-                            dimension: 20,
-                            child: CircularProgressIndicator(strokeWidth: 2),
-                          )
-                        : const Icon(Icons.send),
-                  ),
-                ),
+              OutlinedButton.icon(
+                onPressed: isProcessing ? null : onMicrophone,
+                icon: Icon(isRecording ? Icons.stop : Icons.mic_none),
+                label: Text(isRecording ? 'Stop and transcribe' : 'Speak'),
               ),
-              const SizedBox(height: 4),
-              const Text(
-                'Commands are handled and logged on this device. Offline voice '
-                'recognition will be added in Stage 3.',
-              ),
-              const SizedBox(height: 8),
-              Wrap(
-                spacing: 8,
-                children: [
-                  OutlinedButton.icon(
-                    onPressed: isProcessing ? null : onMicrophone,
-                    icon: const Icon(Icons.mic_none),
-                    label: const Text('Microphone permission'),
-                  ),
-                  OutlinedButton.icon(
-                    onPressed: isProcessing ? null : onStorage,
-                    icon: const Icon(Icons.folder_open_outlined),
-                    label: const Text('Storage access'),
-                  ),
-                ],
+              OutlinedButton.icon(
+                onPressed: isProcessing ? null : onStorage,
+                icon: const Icon(Icons.folder_open_outlined),
+                label: const Text('Storage access'),
               ),
             ],
           ),
-        ),
-      );
+        ],
+      ),
+    ),
+  );
 }

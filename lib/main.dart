@@ -1,7 +1,10 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:path/path.dart' as path;
+import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:provider/provider.dart';
 import 'package:workmanager/workmanager.dart';
@@ -10,12 +13,22 @@ import 'core/database/db_helper.dart';
 import 'core/services/archival_worker.dart';
 import 'core/services/call_assistant_service.dart';
 import 'core/services/device_permission_service.dart';
+import 'core/services/local_model_bridge.dart';
 import 'core/services/nabi_action_handler.dart';
+import 'core/services/nabi_speech_service.dart';
 import 'ui/dashboard_screen.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  final supportDirectory = await getApplicationSupportDirectory();
+  final modelFile = File(
+    path.join(supportDirectory.path, 'models', 'nabi-model.gguf'),
+  );
   await DBHelper.instance.database;
+  final callAssistantPreference = await DBHelper.instance.readUserPreference(
+    'call_assistant_enabled',
+  );
+  final callAssistantEnabled = callAssistantPreference == true;
   await Workmanager().initialize(archivalCallbackDispatcher);
   await Workmanager().registerPeriodicTask(
     archivalTaskName,
@@ -26,61 +39,122 @@ Future<void> main() async {
   );
   runApp(
     ChangeNotifierProvider(
-      create: (_) => CallAssistantService(),
-      child: const NabiApp(automationScheduled: true),
+      create: (_) => CallAssistantService(initialValue: callAssistantEnabled),
+      child: NabiApp(automationScheduled: true, modelPath: modelFile.path),
     ),
   );
 }
 
 class NabiApp extends StatelessWidget {
-  const NabiApp({required this.automationScheduled, super.key});
+  const NabiApp({
+    required this.automationScheduled,
+    required this.modelPath,
+    super.key,
+  });
 
   final bool automationScheduled;
+  final String modelPath;
 
   @override
   Widget build(BuildContext context) => MaterialApp(
-        title: 'Nabi',
-        debugShowCheckedModeBanner: false,
-        theme: ThemeData(
-          brightness: Brightness.dark,
-          colorScheme: ColorScheme.fromSeed(
-            seedColor: const Color(0xFF8B7CFF),
-            brightness: Brightness.dark,
-          ),
-          scaffoldBackgroundColor: const Color(0xFF101018),
-          useMaterial3: true,
-        ),
-        home: NabiHomePage(automationScheduled: automationScheduled),
-      );
+    title: 'Nabi',
+    debugShowCheckedModeBanner: false,
+    theme: ThemeData(
+      brightness: Brightness.dark,
+      colorScheme: ColorScheme.fromSeed(
+        seedColor: const Color(0xFF8B7CFF),
+        brightness: Brightness.dark,
+      ),
+      scaffoldBackgroundColor: const Color(0xFF101018),
+      useMaterial3: true,
+    ),
+    home: NabiHomePage(
+      automationScheduled: automationScheduled,
+      modelPath: modelPath,
+    ),
+  );
 }
 
 class NabiHomePage extends StatefulWidget {
-  const NabiHomePage({required this.automationScheduled, super.key});
+  const NabiHomePage({
+    required this.automationScheduled,
+    required this.modelPath,
+    super.key,
+  });
 
   final bool automationScheduled;
+  final String modelPath;
 
   @override
   State<NabiHomePage> createState() => _NabiHomePageState();
 }
 
-class _NabiHomePageState extends State<NabiHomePage> {
+class _NabiHomePageState extends State<NabiHomePage>
+    with WidgetsBindingObserver {
   int? _activeCalls;
   int? _activeRecords;
   bool _loadingArchive = false;
   bool _processingCommand = false;
+  bool _isRecording = false;
+  bool _isTranscribing = false;
+  bool _modelLoading = true;
   String? _memoryError;
+  String? _modelError;
+  LocalModelIntegrationBridge? _localModel;
   final TextEditingController _commandController = TextEditingController();
+  final NabiSpeechService _speech = NabiSpeechService();
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _loadMemoryStatus();
+    _loadModel();
   }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _commandController.dispose();
+    unawaited(_speech.dispose());
+    final model = _localModel;
+    if (model != null) unawaited(model.dispose());
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state != AppLifecycleState.resumed && _isRecording) {
+      setState(() => _isRecording = false);
+      unawaited(_speech.cancelRecording());
+    }
+  }
+
+  Future<void> _loadModel() async {
+    try {
+      if (!await File(widget.modelPath).exists()) {
+        throw StateError('Add a local GGUF model at ${widget.modelPath}.');
+      }
+      final model = await LocalModelIntegrationBridge.load(
+        modelPath: widget.modelPath,
+      );
+      if (!mounted) {
+        unawaited(model.dispose());
+        return;
+      }
+      setState(() {
+        _localModel = model;
+        _modelError = null;
+        _modelLoading = false;
+      });
+    } catch (error) {
+      if (mounted) {
+        setState(() {
+          _modelError = 'Could not load local model: $error';
+          _modelLoading = false;
+        });
+      }
+    }
   }
 
   Future<void> _loadMemoryStatus() async {
@@ -89,7 +163,8 @@ class _NabiHomePageState extends State<NabiHomePage> {
       if (mounted) {
         setState(() {
           _memoryError = null;
-          _activeCalls = (counts['call_assistant_logs'] ?? 0) +
+          _activeCalls =
+              (counts['call_assistant_logs'] ?? 0) +
               (counts['system_action_logs'] ?? 0) +
               (counts['memory_logs'] ?? 0);
           _activeRecords = counts.values.fold<int>(
@@ -111,16 +186,31 @@ class _NabiHomePageState extends State<NabiHomePage> {
 
     setState(() => _processingCommand = true);
     try {
-      final result = await NabiActionHandler().handleCommand(command);
+      final result = await NabiActionHandler(
+        model: _localModel,
+        modelUnavailableReason: _modelError,
+      ).handleCommand(command);
       if (!mounted) return;
       _commandController.clear();
       await _loadMemoryStatus();
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(result.response)),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(result.response)));
+        try {
+          await _speech.speak(result.response);
+        } catch (error) {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(content: Text('Could not speak the response: $error')),
+            );
+          }
+        }
       }
     } catch (error) {
+      if (mounted) {
+        await _loadMemoryStatus();
+      }
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('Command could not be processed: $error')),
@@ -133,12 +223,12 @@ class _NabiHomePageState extends State<NabiHomePage> {
 
   Future<void> _requestMicrophonePermission() async {
     try {
-      final result =
-          await DevicePermissionService().requestMicrophonePermission();
+      final result = await DevicePermissionService()
+          .requestMicrophonePermission();
       if (!mounted) return;
       final message = switch (result) {
         DevicePermissionResult.granted =>
-          'Microphone permission granted. Offline speech recognition is planned for Stage 3.',
+          'Microphone permission granted. Audio is processed locally.',
         DevicePermissionResult.permanentlyDenied =>
           'Microphone access is blocked. Enable it in system settings.',
         DevicePermissionResult.restricted =>
@@ -151,20 +241,55 @@ class _NabiHomePageState extends State<NabiHomePage> {
         SnackBar(
           content: Text(message),
           action: result == DevicePermissionResult.permanentlyDenied
-              ? SnackBarAction(
-                  label: 'Settings',
-                  onPressed: openAppSettings,
-                )
+              ? SnackBarAction(label: 'Settings', onPressed: openAppSettings)
               : null,
         ),
       );
+      if (result == DevicePermissionResult.granted ||
+          result == DevicePermissionResult.notRequired) {
+        await _speech.startRecording();
+        if (mounted) setState(() => _isRecording = true);
+      }
     } catch (error) {
+      if (mounted) setState(() => _isRecording = false);
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-              content: Text('Could not request microphone access: $error')),
+            content: Text('Could not request microphone access: $error'),
+          ),
         );
       }
+    }
+  }
+
+  Future<void> _toggleRecording() async {
+    if (_processingCommand || _isTranscribing) return;
+    if (_isRecording) {
+      setState(() {
+        _isRecording = false;
+        _isTranscribing = true;
+      });
+      try {
+        final transcript = await _speech.stopAndTranscribe();
+        if (!mounted) return;
+        _commandController.text = transcript;
+        await _runCommand();
+      } catch (error) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Offline transcription failed: $error')),
+          );
+        }
+      } finally {
+        if (mounted) setState(() => _isTranscribing = false);
+      }
+      return;
+    }
+    setState(() => _isTranscribing = true);
+    try {
+      await _requestMicrophonePermission();
+    } finally {
+      if (mounted) setState(() => _isTranscribing = false);
     }
   }
 
@@ -187,10 +312,7 @@ class _NabiHomePageState extends State<NabiHomePage> {
         SnackBar(
           content: Text(message),
           action: result == DevicePermissionResult.permanentlyDenied
-              ? SnackBarAction(
-                  label: 'Settings',
-                  onPressed: openAppSettings,
-                )
+              ? SnackBarAction(label: 'Settings', onPressed: openAppSettings)
               : null,
         ),
       );
@@ -208,7 +330,7 @@ class _NabiHomePageState extends State<NabiHomePage> {
     bool enabled,
   ) async {
     if (!enabled) {
-      service.setEnabled(false);
+      await _saveCallAssistantPreference(service, false);
       return;
     }
     final approved = await showDialog<bool>(
@@ -216,7 +338,7 @@ class _NabiHomePageState extends State<NabiHomePage> {
       builder: (context) => AlertDialog(
         title: const Text('Call assistant preference'),
         content: const Text(
-          'This session-only preference does not activate a call feature. '
+          'This preference is saved locally and does not activate a call feature. '
           'This build cannot answer calls, record caller audio, or enable '
           'call-accessibility controls. No call data is collected by enabling it.',
         ),
@@ -232,7 +354,28 @@ class _NabiHomePageState extends State<NabiHomePage> {
         ],
       ),
     );
-    if (approved == true) service.setEnabled(true);
+    if (approved == true) await _saveCallAssistantPreference(service, true);
+  }
+
+  Future<void> _saveCallAssistantPreference(
+    CallAssistantService service,
+    bool enabled,
+  ) async {
+    try {
+      await DBHelper.instance.saveUserPreference(
+        'call_assistant_enabled',
+        enabled,
+      );
+      service.setEnabled(enabled);
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Could not save this preference locally: $error'),
+          ),
+        );
+      }
+    }
   }
 
   Future<void> _reviewArchive() async {
@@ -249,8 +392,9 @@ class _NabiHomePageState extends State<NabiHomePage> {
       }
 
       final contents = await file.readAsString();
-      final prettyJson =
-          const JsonEncoder.withIndent('  ').convert(jsonDecode(contents));
+      final prettyJson = const JsonEncoder.withIndent(
+        '  ',
+      ).convert(jsonDecode(contents));
       await showDialog<void>(
         context: context,
         builder: (context) => AlertDialog(
@@ -510,15 +654,18 @@ class _NabiHomePageState extends State<NabiHomePage> {
           ),
           NabiDashboardMetric(
             label: 'Call / command logs',
-            value:
-                _memoryError != null ? '—' : (_activeCalls?.toString() ?? '…'),
+            value: _memoryError != null
+                ? '—'
+                : (_activeCalls?.toString() ?? '…'),
             icon: Icons.receipt_long_outlined,
           ),
           if (_memoryError != null)
             Card(
               child: ListTile(
-                leading:
-                    const Icon(Icons.error_outline, color: Colors.redAccent),
+                leading: const Icon(
+                  Icons.error_outline,
+                  color: Colors.redAccent,
+                ),
                 title: const Text('Could not load local memory'),
                 subtitle: Text(_memoryError!),
                 trailing: IconButton(
@@ -528,14 +675,20 @@ class _NabiHomePageState extends State<NabiHomePage> {
                 ),
               ),
             ),
-          NabiAutomationStatusCard(
-            isScheduled: widget.automationScheduled,
+          NabiAutomationStatusCard(isScheduled: widget.automationScheduled),
+          NabiModelStatusCard(
+            isReady: _localModel != null,
+            status: _modelLoading
+                ? 'Loading the on-device GGUF model…'
+                : (_modelError ??
+                      'GGUF model loaded for private on-device inference.'),
           ),
           NabiCommandPanel(
             controller: _commandController,
-            isProcessing: _processingCommand,
+            isProcessing: _processingCommand || _isTranscribing,
+            isRecording: _isRecording,
             onSubmit: _runCommand,
-            onMicrophone: _requestMicrophonePermission,
+            onMicrophone: _toggleRecording,
             onStorage: _requestStoragePermission,
           ),
           const SizedBox(height: 12),
@@ -546,7 +699,7 @@ class _NabiHomePageState extends State<NabiHomePage> {
                   _setCallAssistantPreference(callAssistant, value),
               title: const Text('Call assistant'),
               subtitle: const Text(
-                'Session-only preference; this build has no call controls or call-audio capture.',
+                'Saved on this device only; no call controls or call-audio capture are active.',
               ),
               secondary: const Icon(Icons.call_outlined),
             ),
