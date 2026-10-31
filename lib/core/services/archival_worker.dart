@@ -134,8 +134,13 @@ class ArchivalWorker {
       'call_assistant_logs',
       'location_tracking_logs',
       'system_action_logs',
+      'memory_logs',
     ]) {
       final rows = records[table];
+      if (table == 'memory_logs' && rows == null) {
+        ids[table] = [];
+        continue;
+      }
       if (rows is! List) {
         throw FormatException('Archive is missing table $table');
       }

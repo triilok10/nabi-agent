@@ -2,12 +2,16 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:permission_handler/permission_handler.dart';
 import 'package:provider/provider.dart';
 import 'package:workmanager/workmanager.dart';
 
 import 'core/database/db_helper.dart';
 import 'core/services/archival_worker.dart';
 import 'core/services/call_assistant_service.dart';
+import 'core/services/device_permission_service.dart';
+import 'core/services/nabi_action_handler.dart';
+import 'ui/dashboard_screen.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -23,13 +27,15 @@ Future<void> main() async {
   runApp(
     ChangeNotifierProvider(
       create: (_) => CallAssistantService(),
-      child: const NabiApp(),
+      child: const NabiApp(automationScheduled: true),
     ),
   );
 }
 
 class NabiApp extends StatelessWidget {
-  const NabiApp({super.key});
+  const NabiApp({required this.automationScheduled, super.key});
+
+  final bool automationScheduled;
 
   @override
   Widget build(BuildContext context) => MaterialApp(
@@ -44,12 +50,14 @@ class NabiApp extends StatelessWidget {
           scaffoldBackgroundColor: const Color(0xFF101018),
           useMaterial3: true,
         ),
-        home: const NabiHomePage(),
+        home: NabiHomePage(automationScheduled: automationScheduled),
       );
 }
 
 class NabiHomePage extends StatefulWidget {
-  const NabiHomePage({super.key});
+  const NabiHomePage({required this.automationScheduled, super.key});
+
+  final bool automationScheduled;
 
   @override
   State<NabiHomePage> createState() => _NabiHomePageState();
@@ -59,12 +67,20 @@ class _NabiHomePageState extends State<NabiHomePage> {
   int? _activeCalls;
   int? _activeRecords;
   bool _loadingArchive = false;
+  bool _processingCommand = false;
   String? _memoryError;
+  final TextEditingController _commandController = TextEditingController();
 
   @override
   void initState() {
     super.initState();
     _loadMemoryStatus();
+  }
+
+  @override
+  void dispose() {
+    _commandController.dispose();
+    super.dispose();
   }
 
   Future<void> _loadMemoryStatus() async {
@@ -73,7 +89,9 @@ class _NabiHomePageState extends State<NabiHomePage> {
       if (mounted) {
         setState(() {
           _memoryError = null;
-          _activeCalls = counts['call_assistant_logs'] ?? 0;
+          _activeCalls = (counts['call_assistant_logs'] ?? 0) +
+              (counts['system_action_logs'] ?? 0) +
+              (counts['memory_logs'] ?? 0);
           _activeRecords = counts.values.fold<int>(
             0,
             (sum, count) => sum + count,
@@ -83,6 +101,104 @@ class _NabiHomePageState extends State<NabiHomePage> {
     } catch (error) {
       if (mounted) {
         setState(() => _memoryError = 'Could not load local memory: $error');
+      }
+    }
+  }
+
+  Future<void> _runCommand() async {
+    final command = _commandController.text.trim();
+    if (command.isEmpty || _processingCommand) return;
+
+    setState(() => _processingCommand = true);
+    try {
+      final result = await NabiActionHandler().handleCommand(command);
+      if (!mounted) return;
+      _commandController.clear();
+      await _loadMemoryStatus();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(result.response)),
+        );
+      }
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Command could not be processed: $error')),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _processingCommand = false);
+    }
+  }
+
+  Future<void> _requestMicrophonePermission() async {
+    try {
+      final result =
+          await DevicePermissionService().requestMicrophonePermission();
+      if (!mounted) return;
+      final message = switch (result) {
+        DevicePermissionResult.granted =>
+          'Microphone permission granted. Offline speech recognition is planned for Stage 3.',
+        DevicePermissionResult.permanentlyDenied =>
+          'Microphone access is blocked. Enable it in system settings.',
+        DevicePermissionResult.restricted =>
+          'Microphone access is restricted by this device.',
+        DevicePermissionResult.denied => 'Microphone permission was denied.',
+        DevicePermissionResult.notRequired =>
+          'Microphone permission is not required on this platform.',
+      };
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(message),
+          action: result == DevicePermissionResult.permanentlyDenied
+              ? SnackBarAction(
+                  label: 'Settings',
+                  onPressed: openAppSettings,
+                )
+              : null,
+        ),
+      );
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+              content: Text('Could not request microphone access: $error')),
+        );
+      }
+    }
+  }
+
+  Future<void> _requestStoragePermission() async {
+    try {
+      final result = await DevicePermissionService().requestStoragePermission();
+      if (!mounted) return;
+      final message = switch (result) {
+        DevicePermissionResult.granted =>
+          'Storage access granted for legacy Android storage.',
+        DevicePermissionResult.permanentlyDenied =>
+          'Storage access is blocked. Enable it in system settings.',
+        DevicePermissionResult.restricted =>
+          'Storage access is restricted by this device.',
+        DevicePermissionResult.denied => 'Storage permission was denied.',
+        DevicePermissionResult.notRequired =>
+          'Android app-private storage needs no broad storage permission.',
+      };
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(message),
+          action: result == DevicePermissionResult.permanentlyDenied
+              ? SnackBarAction(
+                  label: 'Settings',
+                  onPressed: openAppSettings,
+                )
+              : null,
+        ),
+      );
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Could not check storage access: $error')),
+        );
       }
     }
   }
@@ -224,7 +340,8 @@ class _NabiHomePageState extends State<NabiHomePage> {
                       children: [
                         const Text(
                           'The complete reviewed JSON, including any stored '
-                          'call transcripts and locations, will be attached. '
+                          'call transcripts, commands, responses, and locations, '
+                          'will be attached. '
                           'Settings and credentials are used only for this send.',
                         ),
                         const SizedBox(height: 16),
@@ -384,18 +501,42 @@ class _NabiHomePageState extends State<NabiHomePage> {
             ),
           ),
           const SizedBox(height: 12),
-          Card(
-            child: ListTile(
-              leading: const Icon(Icons.storage_outlined),
-              title: const Text('Local memory'),
-              subtitle: Text(
-                _memoryError ??
-                    (_activeRecords == null
-                        ? 'Loading local record count…'
-                        : '$_activeRecords active records stored on this device'
-                            '${_activeCalls == null ? '' : ' ($_activeCalls call logs)'}'),
+          NabiDashboardMetric(
+            label: 'Active local records',
+            value: _memoryError != null
+                ? '—'
+                : (_activeRecords?.toString() ?? '…'),
+            icon: Icons.storage_outlined,
+          ),
+          NabiDashboardMetric(
+            label: 'Call / command logs',
+            value:
+                _memoryError != null ? '—' : (_activeCalls?.toString() ?? '…'),
+            icon: Icons.receipt_long_outlined,
+          ),
+          if (_memoryError != null)
+            Card(
+              child: ListTile(
+                leading:
+                    const Icon(Icons.error_outline, color: Colors.redAccent),
+                title: const Text('Could not load local memory'),
+                subtitle: Text(_memoryError!),
+                trailing: IconButton(
+                  tooltip: 'Retry',
+                  onPressed: _loadMemoryStatus,
+                  icon: const Icon(Icons.refresh),
+                ),
               ),
             ),
+          NabiAutomationStatusCard(
+            isScheduled: widget.automationScheduled,
+          ),
+          NabiCommandPanel(
+            controller: _commandController,
+            isProcessing: _processingCommand,
+            onSubmit: _runCommand,
+            onMicrophone: _requestMicrophonePermission,
+            onStorage: _requestStoragePermission,
           ),
           const SizedBox(height: 12),
           Card(

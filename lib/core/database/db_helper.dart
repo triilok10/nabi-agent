@@ -16,7 +16,7 @@ class DBHelper {
     final dbPath = path.join(await getDatabasesPath(), _databaseName);
     final opened = await openDatabase(
       dbPath,
-      version: 1,
+      version: 2,
       onCreate: (db, version) async {
         await db.execute('''
           CREATE TABLE call_assistant_logs (
@@ -52,6 +52,7 @@ class DBHelper {
             is_archived INTEGER NOT NULL DEFAULT 0
           )
         ''');
+        await _createMemoryLogsTable(db);
         await db.execute(
           'CREATE INDEX call_logs_timestamp_idx ON call_assistant_logs(call_timestamp)',
         );
@@ -62,6 +63,9 @@ class DBHelper {
           'CREATE INDEX action_logs_timestamp_idx ON system_action_logs(timestamp)',
         );
       },
+      onUpgrade: (db, oldVersion, newVersion) async {
+        if (oldVersion < 2) await _createMemoryLogsTable(db);
+      },
     );
     _database = opened;
     return opened;
@@ -70,6 +74,36 @@ class DBHelper {
   Future<int> insertRecord(String table, Map<String, Object?> values) async {
     _validateTable(table);
     return (await database).insert(table, values);
+  }
+
+  Future<int> insertMemoryLog({
+    required String interactionType,
+    required String userInput,
+    required String systemResponse,
+    String? executedAction,
+    required String executionStatus,
+    DateTime? timestamp,
+  }) async {
+    return (await database).insert('memory_logs', {
+      'interaction_type': interactionType,
+      'user_input': userInput,
+      'system_response': systemResponse,
+      'executed_action': executedAction,
+      'execution_status': executionStatus,
+      'timestamp':
+          (timestamp ?? DateTime.now().toUtc()).toUtc().toIso8601String(),
+    });
+  }
+
+  Future<List<Map<String, Object?>>> fetchMemoryLogs({int limit = 100}) async {
+    if (limit < 1)
+      throw ArgumentError.value(limit, 'limit', 'Must be positive');
+    return (await database).query(
+      'memory_logs',
+      where: 'is_archived = 0',
+      orderBy: 'julianday(timestamp) DESC',
+      limit: limit,
+    );
   }
 
   Future<List<Map<String, Object?>>> fetchActiveRecords(String table) async {
@@ -91,7 +125,7 @@ class DBHelper {
         .toIso8601String();
     final db = await database;
     final result = <String, List<Map<String, Object?>>>{};
-    for (final table in _tables) {
+    for (final table in _recordTables) {
       final column = _timestampColumn(table);
       result[table] = await db.query(
         table,
@@ -106,7 +140,7 @@ class DBHelper {
   Future<Map<String, int>> activeRecordCounts() async {
     final db = await database;
     final result = <String, int>{};
-    for (final table in _tables) {
+    for (final table in _recordTables) {
       final rows = await db.rawQuery(
         'SELECT COUNT(*) AS count FROM $table WHERE is_archived = 0',
       );
@@ -187,12 +221,32 @@ class DBHelper {
     'system_action_logs',
   ];
 
+  static const List<String> _recordTables = [..._tables, 'memory_logs'];
+
   void _validateTable(String table) {
-    if (!_tables.contains(table)) {
+    if (!_recordTables.contains(table)) {
       throw ArgumentError.value(table, 'table', 'Unsupported database table');
     }
   }
 
   String _timestampColumn(String table) =>
       table == 'call_assistant_logs' ? 'call_timestamp' : 'timestamp';
+
+  static Future<void> _createMemoryLogsTable(DatabaseExecutor db) async {
+    await db.execute('''
+      CREATE TABLE memory_logs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        interaction_type TEXT NOT NULL,
+        user_input TEXT NOT NULL,
+        system_response TEXT NOT NULL,
+        executed_action TEXT,
+        execution_status TEXT NOT NULL,
+        timestamp TEXT NOT NULL,
+        is_archived INTEGER NOT NULL DEFAULT 0
+      )
+    ''');
+    await db.execute(
+      'CREATE INDEX memory_logs_timestamp_idx ON memory_logs(timestamp)',
+    );
+  }
 }
