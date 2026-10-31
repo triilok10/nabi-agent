@@ -1,0 +1,33 @@
+name: nabi_agent
+description: Private, local-first assistant with user-controlled memory.
+publish_to: "none"
+version: 0.1.0+1
+
+environment:
+  sdk: ">=3.3.0 <4.0.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  connectivity_plus: ^6.1.4
+  ffi: ^2.1.4
+  flutter_tts: ^4.2.3
+  geolocator: ^14.0.2
+  intl: ^0.20.2
+  mailer: ^6.4.1
+  path: ^1.9.1
+  path_provider: ^2.1.5
+  permission_handler: ^12.0.1
+  provider: ^6.1.5+1
+  sqflite: ^2.4.2
+  workmanager: ^0.5.2
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^5.0.0
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/models/
