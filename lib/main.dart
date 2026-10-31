@@ -377,7 +377,7 @@ class _NabiHomePageState extends State<NabiHomePage>
     final backupFile = File('${widget.modelPath}.$suffix.backup');
     final input = selectedFile.readAsByteStream().cast<List<int>>();
     var destinationBackedUp = false;
-    var previousModelDisposed = false;
+    var modelReloadRequired = false;
 
     try {
       await input.pipe(temporaryFile.openWrite());
@@ -388,7 +388,6 @@ class _NabiHomePageState extends State<NabiHomePage>
       final previousModel = _localModel;
       if (previousModel != null) {
         await previousModel.dispose();
-        previousModelDisposed = true;
       }
       if (mounted) {
         setState(() {
@@ -396,6 +395,7 @@ class _NabiHomePageState extends State<NabiHomePage>
           _modelError = null;
           _modelLoading = true;
         });
+        modelReloadRequired = true;
       }
 
       if (await modelFile.exists()) {
@@ -408,7 +408,7 @@ class _NabiHomePageState extends State<NabiHomePage>
       if (destinationBackedUp && !await modelFile.exists()) {
         await backupFile.rename(modelFile.path);
       }
-      if (previousModelDisposed && mounted) await _loadModel();
+      if (modelReloadRequired && mounted) await _loadModel();
       rethrow;
     } finally {
       if (await temporaryFile.exists()) await temporaryFile.delete();
