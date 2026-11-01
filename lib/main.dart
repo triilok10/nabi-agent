@@ -21,9 +21,13 @@ import 'ui/dashboard_screen.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  final supportDirectory = await getApplicationSupportDirectory();
+  final cacheDirectories = await getExternalCacheDirectories();
+  if (cacheDirectories == null || cacheDirectories.isEmpty) {
+    throw StateError('External cache directory is unavailable.');
+  }
+  final cacheDir = cacheDirectories.first;
   final modelFile = File(
-    path.join(supportDirectory.path, 'models', 'nabi-model.gguf'),
+    path.join(cacheDir.path, 'nabi-model.gguf'),
   );
   await DBHelper.instance.database;
   final callAssistantPreference = await DBHelper.instance.readUserPreference(
